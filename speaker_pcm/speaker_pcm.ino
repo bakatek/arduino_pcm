@@ -32,6 +32,14 @@
 
 #define SAMPLE_RATE 8000
 
+#if defined(ARDUINO) && ARDUINO >= 100
+#include "Arduino.h"
+#else
+#include "WProgram.h"
+#endif
+
+#include "PCM.h"
+
 /*
  * The audio data needs to be unsigned, 8-bit, 8000 Hz, and small enough
  * to fit in flash. 10000-13000 samples is about the limit.
@@ -57,7 +65,6 @@
  */
 
 #include "sounddata.h"
-
 int ledPin0 = 4; // RED
 int ledPin1 = 5; // Yellow 1
 int ledPin2 = 6; // Yellow 2
@@ -67,126 +74,125 @@ int inputPin1 = 2; // RedPush Button (pulse)
 int inputPin2 = 8; // Switch close (perm)
 int inputPin3 = 9; // Switch Open (perm)
 
-int speakerPin = 3; // Can be either 3 or 11, two PWM outputs connected to Timer 2
-volatile uint16_t sample;
-byte lastSample;
 
 int seqPos = 0;
 int sndPos = 0;
 int speedtime = 2000;
 
 
-void stopPlayback()
-{
-    // Disable playback per-sample interrupt.
-    TIMSK1 &= ~_BV(OCIE1A);
-
-    // Disable the per-sample timer completely.
-    TCCR1B &= ~_BV(CS10);
-
-    // Disable the PWM timer.
-    TCCR2B &= ~_BV(CS10);
-
-    digitalWrite(speakerPin, LOW);
-}
+int speakerPin = 3; // Can be either 3 or 11, two PWM outputs connected to Timer 2
+//int speakerPin = 11;
+unsigned char const *sounddata_data=0;
+int sounddata_length=0;
+volatile uint16_t sample;
+byte lastSample;
+bool thisIsTheEnd = LOW;
+bool thisIsTheEndRestart = LOW;
 
 // This is called at 8000 Hz to load the next sample.
 ISR(TIMER1_COMPA_vect) {
-    if (sample >= sounddata_length) {
-        if (sample == sounddata_length + lastSample) {
-            if (seqPos == 8){
-              seqPos = 1;
-            }else{
-              seqPos = seqPos + 1;
-            }
-            sample = -1;
-            //startPlayback();
+  if (sample >= sounddata_length) {
+    if (sample == sounddata_length + lastSample) {
+      //stopPlayback();
+      if (thisIsTheEnd == HIGH){
+        if (thisIsTheEndRestart == HIGH){
+          //stopPlayback();
+          thisIsTheEndRestart = LOW;
+          thisIsTheEnd = LOW;
+          startPlayback(sounddata_bcle_data, sounddata_bcle_length);
+        }else{
+          //stopPlayback();
+          thisIsTheEndRestart = HIGH;
+          startPlayback(sounddata_bug_data, sounddata_bug_length);
         }
-        else {
-            if(speakerPin==11){
-                // Ramp down to zero to reduce the click at the end of playback.
-                OCR2A = sounddata_length + lastSample - sample;
-            } else {
-                OCR2B = sounddata_length + lastSample - sample;                
-            }
+      }else{
+        if (seqPos == 8){
+          seqPos = 1;
+        }else{
+          seqPos = seqPos + 1;
         }
+        sample = -1;  
+      }
     }
     else {
-        if(speakerPin==11){
-            OCR2A = pgm_read_byte(&sounddata_data[sample]);
-        } else {
-            OCR2B = pgm_read_byte(&sounddata_data[sample]);            
-        }
+      // Ramp down to zero to reduce the click at the end of playback.
+      OCR2A = sounddata_length + lastSample - sample;
     }
-
-    ++sample;
-    ++sample;
+  }
+  else {
+    OCR2A = pgm_read_byte(&sounddata_data[sample]);
+  }
+  
+  ++sample;
 }
 
-void startPlayback()
+void startPlayback(unsigned char const *data, int length)
 {
+  sounddata_data = data;
+  sounddata_length = length;
 
-    // Set up Timer 2 to do pulse width modulation on the speaker
-    // pin.
-
-    // Use internal clock (datasheet p.160)
-    ASSR &= ~(_BV(EXCLK) | _BV(AS2));
-
-    // Set fast PWM mode  (p.157)
-    TCCR2A |= _BV(WGM21) | _BV(WGM20);
-    TCCR2B &= ~_BV(WGM22);
-
-    if(speakerPin==11){
-        // Do non-inverting PWM on pin OC2A (p.155)
-        // On the Arduino this is pin 11.
-        TCCR2A = (TCCR2A | _BV(COM2A1)) & ~_BV(COM2A0);
-        TCCR2A &= ~(_BV(COM2B1) | _BV(COM2B0));
-        // No prescaler (p.158)
-        TCCR2B = (TCCR2B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
-
-        // Set initial pulse width to the first sample.
-        OCR2A = pgm_read_byte(&sounddata_data[0]);
-    } else {
-        // Do non-inverting PWM on pin OC2B (p.155)
-        // On the Arduino this is pin 3.
-        TCCR2A = (TCCR2A | _BV(COM2B1)) & ~_BV(COM2B0);
-        TCCR2A &= ~(_BV(COM2A1) | _BV(COM2A0));
-        // No prescaler (p.158)
-        TCCR2B = (TCCR2B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
-
-        // Set initial pulse width to the first sample.
-        OCR2B = pgm_read_byte(&sounddata_data[0]);
-    }
-
-
-
-
-
-    // Set up Timer 1 to send a sample every interrupt.
-
-    cli();
-
-    // Set CTC mode (Clear Timer on Compare Match) (p.133)
-    // Have to set OCR1A *after*, otherwise it gets reset to 0!
-    TCCR1B = (TCCR1B & ~_BV(WGM13)) | _BV(WGM12);
-    TCCR1A = TCCR1A & ~(_BV(WGM11) | _BV(WGM10));
-
-    // No prescaler (p.134)
-    TCCR1B = (TCCR1B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
-
-    // Set the compare register (OCR1A).
-    // OCR1A is a 16-bit register, so we have to do this with
-    // interrupts disabled to be safe.
-    OCR1A = F_CPU / SAMPLE_RATE;    // 16e6 / 8000 = 2000
-
-    // Enable interrupt when TCNT1 == OCR1A (p.136)
-    TIMSK1 |= _BV(OCIE1A);
-
-    lastSample = pgm_read_byte(&sounddata_data[sounddata_length-1]);
-    sample = 0;
-    sei();
+  pinMode(speakerPin, OUTPUT);
+  
+  // Set up Timer 2 to do pulse width modulation on the speaker
+  // pin.
+  
+  // Use internal clock (datasheet p.160)
+  ASSR &= ~(_BV(EXCLK) | _BV(AS2));
+  
+  // Set fast PWM mode  (p.157)
+  TCCR2A |= _BV(WGM21) | _BV(WGM20);
+  TCCR2B &= ~_BV(WGM22);
+  
+  // Do non-inverting PWM on pin OC2A (p.155)
+  // On the Arduino this is pin 11.
+  TCCR2A = (TCCR2A | _BV(COM2A1)) & ~_BV(COM2A0);
+  TCCR2A &= ~(_BV(COM2B1) | _BV(COM2B0));
+  
+  // No prescaler (p.158)
+  TCCR2B = (TCCR2B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
+  
+  // Set initial pulse width to the first sample.
+  OCR2A = pgm_read_byte(&sounddata_data[0]);
+  
+  
+  // Set up Timer 1 to send a sample every interrupt.
+  
+  cli();
+  
+  // Set CTC mode (Clear Timer on Compare Match) (p.133)
+  // Have to set OCR1A *after*, otherwise it gets reset to 0!
+  TCCR1B = (TCCR1B & ~_BV(WGM13)) | _BV(WGM12);
+  TCCR1A = TCCR1A & ~(_BV(WGM11) | _BV(WGM10));
+  
+  // No prescaler (p.134)
+  TCCR1B = (TCCR1B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
+  
+  // Set the compare register (OCR1A).
+  // OCR1A is a 16-bit register, so we have to do this with
+  // interrupts disabled to be safe.
+  OCR1A = F_CPU / SAMPLE_RATE;    // 16e6 / 8000 = 2000
+  
+  // Enable interrupt when TCNT1 == OCR1A (p.136)
+  TIMSK1 |= _BV(OCIE1A);
+  
+  lastSample = pgm_read_byte(&sounddata_data[sounddata_length-1]);
+  sample = 0;
+  sei();
 }
 
+void stopPlayback()
+{
+  // Disable playback per-sample interrupt.
+  TIMSK1 &= ~_BV(OCIE1A);
+  
+  // Disable the per-sample timer completely.
+  TCCR1B &= ~_BV(CS10);
+  
+  // Disable the PWM timer.
+  TCCR2B &= ~_BV(CS10);
+  
+  digitalWrite(speakerPin, LOW);
+}
 
 void setup()
 {
@@ -194,9 +200,16 @@ void setup()
     pinMode(ledPin1, OUTPUT);
     pinMode(ledPin2, OUTPUT);
     pinMode(ledPin3, OUTPUT);
+    
+    pinMode(inputPin1, INPUT);
+    pinMode(inputPin2, INPUT);
+    pinMode(inputPin3, INPUT);
 
     pinMode(speakerPin, OUTPUT);
-    startPlayback();
+    //startPlayback(sounddata_open_data, sounddata_open_length);
+    //startPlayback(sounddata_close_data, sounddata_close_length);
+    //startPlayback(sounddata_bug_data, sounddata_bug_length);
+    startPlayback(sounddata_bcle_data, sounddata_bcle_length);
 }
 
 int speedval(){
@@ -209,6 +222,9 @@ int speedval(){
 void loop()
 {
     while (true){
+      if (digitalRead(inputPin1) == HIGH){
+        thisIsTheEnd = HIGH;
+      }
       if (seqPos == 1){
         digitalWrite(ledPin1, HIGH);
         digitalWrite(ledPin2, LOW);
