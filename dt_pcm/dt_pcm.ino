@@ -31,8 +31,7 @@
 #include <avr/pgmspace.h>
 
 #define SAMPLE_RATE 8000
-
-#include "speaker_pcm.h"
+//#include "dt_pcm.h"
 
 /*
  * The audio data needs to be unsigned, 8-bit, 8000 Hz, and small enough
@@ -64,57 +63,53 @@ int ledPin1 = 5; // Yellow 1
 int ledPin2 = 6; // Yellow 2
 int ledPin3 = 7; // Yellow 3
 
-int inputPin1 = 2; // RedPush Button (pulse)
-int inputPin2 = 8; // Switch close (perm)
-int inputPin3 = 9; // Switch Open (perm)
+int inputPin1 = 9; // RedPush Button (pulse)
+//int inputPin2 = 8; // Switch close (perm)
+//int inputPin3 = 9; // Switch Open (perm)
 
 
-int seqPos = 0;
+int seqPos = 1;
 int sndPos = 0;
-int speedtime = 2000;
 
 
 int speakerPin = 3; // Can be either 3 or 11, two PWM outputs connected to Timer 2
 //int speakerPin = 11;
+
 unsigned char const *sounddata_data=0;
 int sounddata_length=0;
+
 volatile uint16_t sample;
 byte lastSample;
+
 bool thisIsTheEnd = LOW;
-bool thisIsTheEndRestart = LOW;
 
 // This is called at 8000 Hz to load the next sample.
 ISR(TIMER1_COMPA_vect) {
   if (sample >= sounddata_length) {
     if (sample == sounddata_length + lastSample) {
-      /*stopPlayback();*/
       if (thisIsTheEnd == HIGH){
-        if (thisIsTheEndRestart == HIGH){
-          //stopPlayback();
-          thisIsTheEndRestart = LOW;
-          thisIsTheEnd = LOW;
-          startPlayback(sounddata_bcle_data, sounddata_bcle_length);
-        }else{
-          //stopPlayback();
-          thisIsTheEndRestart = HIGH;
-          startPlayback(sounddata_bug_data, sounddata_bug_length);
+        stopPlayback();
+        stopPlayback();
+        if (sndPos == 1){
+           sndPos = 3;
         }
       }else{
-        if (seqPos == 8){
+        sample = -1;
+        OCR2B = sounddata_length + lastSample - sample;
+        
+        if (seqPos > 8){
           seqPos = 1;
         }else{
-          seqPos = seqPos + 1;
+          ++seqPos;
         }
-        sample = -1;  
-      }  
-    }
-    else {
+      }
+    } else {
       // Ramp down to zero to reduce the click at the end of playback.
-      OCR2A = sounddata_length + lastSample - sample;
+      OCR2B = sounddata_length + lastSample - sample;
     }
   }
   else {
-    OCR2A = pgm_read_byte(&sounddata_data[sample]);
+    OCR2B = pgm_read_byte(&sounddata_data[sample]);
   }
   
   ++sample;
@@ -122,41 +117,29 @@ ISR(TIMER1_COMPA_vect) {
 
 void startPlayback(unsigned char const *data, int length)
 {
-  /*
-  digitalWrite(LED_BUILTIN, HIGH);   // turn the LED on (HIGH is the voltage level)
-  delay(1000);                       // wait for a second
-  digitalWrite(LED_BUILTIN, LOW);    // turn the LED off by making the voltage LOW
-  delay(1000);                       // wait for a second
-  digitalWrite(LED_BUILTIN, HIGH);   // turn the LED on (HIGH is the voltage level)*/
   sounddata_data = data;
   sounddata_length = length;
 
   pinMode(speakerPin, OUTPUT);
-  
-  // Set up Timer 2 to do pulse width modulation on the speaker
-  // pin.
-  
-  // Use internal clock (datasheet p.160)
-  ASSR &= ~(_BV(EXCLK) | _BV(AS2));
-  
-  // Set fast PWM mode  (p.157)
-  TCCR2A |= _BV(WGM21) | _BV(WGM20);
-  TCCR2B &= ~_BV(WGM22);
-  
-  // Do non-inverting PWM on pin OC2A (p.155)
-  // On the Arduino this is pin 11.
-  TCCR2A = (TCCR2A | _BV(COM2A1)) & ~_BV(COM2A0);
-  TCCR2A &= ~(_BV(COM2B1) | _BV(COM2B0));
-  
-  // No prescaler (p.158)
-  TCCR2B = (TCCR2B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
-  
-  // Set initial pulse width to the first sample.
-  OCR2A = pgm_read_byte(&sounddata_data[0]);
-  
-  
-  // Set up Timer 1 to send a sample every interrupt.
-  
+    // Set up Timer 2 to do pulse width modulation on the speaker
+    // pin.
+
+    // Use internal clock (datasheet p.160)
+    ASSR &= ~(_BV(EXCLK) | _BV(AS2));
+
+    // Set fast PWM mode  (p.157)
+    TCCR2A |= _BV(WGM21) | _BV(WGM20);
+    TCCR2B &= ~_BV(WGM22);
+
+      // Do non-inverting PWM on pin OC2B (p.155)
+      // On the Arduino this is pin 3.
+      TCCR2A = (TCCR2A | _BV(COM2B1)) & ~_BV(COM2B0);
+      TCCR2A &= ~(_BV(COM2A1) | _BV(COM2A0));
+      // No prescaler (p.158)
+      TCCR2B = (TCCR2B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
+
+      // Set initial pulse width to the first sample.
+      OCR2B = pgm_read_byte(&sounddata_data[0]);
   cli();
   
   // Set CTC mode (Clear Timer on Compare Match) (p.133)
@@ -192,13 +175,6 @@ void stopPlayback()
   TCCR2B &= ~_BV(CS10);
   
   digitalWrite(speakerPin, LOW);
-  /*digitalWrite(LED_BUILTIN, HIGH);   // turn the LED on (HIGH is the voltage level)
-  delay(1000);                       // wait for a second
-  digitalWrite(LED_BUILTIN, LOW);    // turn the LED off by making the voltage LOW
-  delay(1000);                       // wait for a second
-  digitalWrite(LED_BUILTIN, HIGH);   // turn the LED on (HIGH is the voltage level)
-  delay(1000);                       // wait for a second
-  digitalWrite(LED_BUILTIN, LOW);    // turn the LED off by making the voltage LOW*/
 }
 
 void setup()
@@ -209,63 +185,65 @@ void setup()
     pinMode(ledPin3, OUTPUT);
     
     pinMode(inputPin1, INPUT);
-    pinMode(inputPin2, INPUT);
-    pinMode(inputPin3, INPUT);
+    //pinMode(inputPin2, INPUT);
+    //pinMode(inputPin3, INPUT);
 
     pinMode(speakerPin, OUTPUT);
-    pinMode(LED_BUILTIN, OUTPUT);
-    //startPlayback(sounddata_open_data, sounddata_open_length);
-    //startPlayback(sounddata_close_data, sounddata_close_length);
-    //startPlayback(sounddata_bug_data, sounddata_bug_length);
     startPlayback(sounddata_bcle_data, sounddata_bcle_length);
 }
 
-int speedval(){
-  if (speedtime > 100){
-    speedtime = speedtime - 10;
+void powerLed(bool A, bool B, bool C, bool D, unsigned int DL=0, unsigned int loopMe=1){
+  while (loopMe > 0){
+    if (loopMe%2 != 0){
+      digitalWrite(ledPin0, A);
+      digitalWrite(ledPin1, B);
+      digitalWrite(ledPin2, C);
+      digitalWrite(ledPin3, D);
+    }else{
+      digitalWrite(ledPin0, !A);
+      digitalWrite(ledPin1, !B);
+      digitalWrite(ledPin2, !C);
+      digitalWrite(ledPin3, !D);
+    }
+    if (DL>0){
+      delay(DL);
+    }
+    --loopMe;
   }
-  return speedtime;
 }
 
 void loop()
 {
     while (true){
-      if (digitalRead(inputPin1) == HIGH){
+      if (digitalRead(inputPin1) == LOW && thisIsTheEnd == LOW){
         thisIsTheEnd = HIGH;
+        stopPlayback();
+        sndPos = 1;
+        startPlayback(sounddata_bug_data, sounddata_bug_length);
       }
-      digitalWrite(LED_BUILTIN, HIGH);   // turn the LED on (HIGH is the voltage level)
+
+      if (sndPos == 3){
+            powerLed(HIGH, HIGH, HIGH,HIGH,200,20);
+            sndPos = 0;
+            startPlayback(sounddata_bcle_data, sounddata_bcle_length);
+            thisIsTheEnd = LOW;
+      }
       if (seqPos == 1){
-        digitalWrite(ledPin1, HIGH);
-        digitalWrite(ledPin2, LOW);
-        digitalWrite(ledPin3, LOW); 
+        powerLed(HIGH, HIGH, LOW,LOW);
       }else if (seqPos == 2){
-        digitalWrite(ledPin1, HIGH);
-        digitalWrite(ledPin2, HIGH);
-        digitalWrite(ledPin3, LOW);
+        powerLed(HIGH, HIGH, HIGH,LOW);
       }else if (seqPos == 3){
-        digitalWrite(ledPin1, HIGH);
-        digitalWrite(ledPin2, LOW);
-        digitalWrite(ledPin3, HIGH);
+        powerLed(HIGH, HIGH, LOW,HIGH);
       }else if (seqPos == 4){
-        digitalWrite(ledPin1, LOW);
-        digitalWrite(ledPin2, HIGH);
-        digitalWrite(ledPin3, HIGH);
+        powerLed(HIGH, LOW, HIGH,HIGH);
       }else if (seqPos == 5){
-        digitalWrite(ledPin1, LOW);
-        digitalWrite(ledPin2, HIGH);
-        digitalWrite(ledPin3, LOW);
+        powerLed(HIGH, LOW, HIGH,LOW);
       }else if (seqPos == 6){
-        digitalWrite(ledPin1, LOW);
-        digitalWrite(ledPin2, LOW);
-        digitalWrite(ledPin3, HIGH);
+        powerLed(HIGH, LOW, LOW,HIGH);
       }else if (seqPos == 7){
-        digitalWrite(ledPin1, HIGH);
-        digitalWrite(ledPin2, HIGH);
-        digitalWrite(ledPin3, LOW);
+        powerLed(HIGH, HIGH, HIGH,LOW);
       }else if (seqPos == 8){
-        digitalWrite(ledPin1, LOW);
-        digitalWrite(ledPin2, HIGH);
-        digitalWrite(ledPin3, HIGH);
+        powerLed(HIGH, LOW, HIGH,HIGH);
       }
     }
 }
